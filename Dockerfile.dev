@@ -1,0 +1,32 @@
+# Development image: an editable install, so `docker compose watch` can sync
+# source straight into the container without a rebuild.
+#
+# It deliberately runs as root and keeps the dev dependencies: this image never
+# leaves a developer's machine.
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    FLASK_APP=wsgi:app
+
+RUN apt-get update \
+ && apt-get install --no-install-recommends --yes curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+
+COPY pyproject.toml README.md ./
+COPY app ./app
+
+RUN pip install --upgrade pip && pip install --editable ".[dev]"
+
+COPY migrations ./migrations
+COPY tests ./tests
+COPY wsgi.py ./
+
+EXPOSE 8000
+
+CMD ["flask", "run", "--host", "0.0.0.0", "--port", "8000"]

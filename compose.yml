@@ -1,0 +1,79 @@
+# ==========================================================================
+# BASE stack (production-oriented). ONE definition of each service — dev
+# ergonomics are layered on top via compose.override.yml (auto-merged by
+# `docker compose up`). For a production-shaped run use the base file alone:
+#
+#   docker compose -f compose.yml up -d
+#
+# Schema changes are applied by the one-shot `migrate` service, which the API
+# waits on. Migrations therefore run exactly once, however many API replicas
+# start — an application container that upgrades its own schema races itself.
+#
+# Required variables use ${VAR?Variable not set} so a missing value fails fast.
+# ==========================================================================
+
+x-app-image: &app-image '${DOCKER_IMAGE_API:-payment-platform-api}:${TAG:-latest}'
+
+x-app-build: &app-build
+  context: .
+  dockerfile: Dockerfile
+
+x-app-environment: &app-environment
+  FLASK_APP: wsgi:app
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER?Variable not set}:${POSTGRES_PASSWORD?Variable not set}@db:5432/${POSTGRES_DB?Variable not set}
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: always
+    environment:
+      # PGDATA is a subdirectory so the volume mount never collides with the
+      # lost+found the kernel puts at the root of a fresh filesystem.
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      - POSTGRES_USER=${POSTGRES_USER?Variable not set}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
+      - POSTGRES_DB=${POSTGRES_DB?Variable not set}
+    volumes:
+      - payments-db-data:/var/lib/postgresql/data/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # One-shot: brings the schema to head, then exits. Not a long-running service.
+  migrate:
+    image: *app-image
+    build: *app-build
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *app-environment
+    command: flask db upgrade
+
+  api:
+    image: *app-image
+    build: *app-build
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-environment
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-4}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  payments-db-data:

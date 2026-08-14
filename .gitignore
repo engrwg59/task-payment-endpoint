@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+.venv/
+venv/
+
+.env
+
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local reference material, not part of the deliverable.
+docker-compose-refer/

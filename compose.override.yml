@@ -1,0 +1,61 @@
+# ==========================================================================
+# DEV override — auto-merged with compose.yml by `docker compose up`.
+# It ONLY adds dev ergonomics; it never leaks into a production-shaped run
+# (`docker compose -f compose.yml up`). Highlights:
+#   • the database port is published, so host-side tests can reach it
+#   • the test database is created on first start
+#   • restart: "no"  (a crash stays down so you can read the error)
+#   • develop.watch  (sync code in, rebuild on dependency changes)
+#   • demo rows are seeded, and adminer is available as a database UI
+#
+# Run with hot reload:  docker compose watch
+# ==========================================================================
+
+services:
+  db:
+    restart: "no"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Creates payments_test alongside the development database. Runs only on
+      # the very first start of the volume, which is when the cluster is built.
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+
+  migrate:
+    build:
+      dockerfile: Dockerfile.dev
+    # Demo rows belong to development only, so they are seeded here rather than
+    # in the base stack. Both commands are idempotent and safe to re-run.
+    command: sh -c "flask db upgrade && flask seed-demo"
+
+  api:
+    build:
+      dockerfile: Dockerfile.dev
+    restart: "no"
+    environment:
+      FLASK_DEBUG: 1
+      # So `docker compose exec api pytest` reaches the throwaway database created by
+      # docker/initdb. The suite drops and rebuilds this schema on every run.
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER?Variable not set}:${POSTGRES_PASSWORD?Variable not set}@db:5432/payments_test
+    command: flask run --host 0.0.0.0 --port 8000
+    develop:
+      watch:
+        - path: ./app
+          action: sync
+          target: /srv/app
+        - path: ./tests
+          action: sync
+          target: /srv/tests
+        - path: ./pyproject.toml
+          action: rebuild
+
+  # Dev helper: a database UI at http://localhost:8081, handy for reading the
+  # payments and payment_events tables after a request.
+  adminer:
+    image: adminer:5
+    restart: "no"
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
